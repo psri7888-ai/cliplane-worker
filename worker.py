@@ -102,11 +102,11 @@ def run_generation(job, tmp):
     max_s = min(60, plan["max_clip_seconds"])
     clips = highlights.build_clips(tr["segments"], dur, n=3, min_s=min(20, max_s, max(5, int(dur * 0.5))), max_s=max_s)  # short videos get shorter minimums
     if not clips:
-        raise RuntimeError("The AI found no suitable moments in this video.")
+        raise RuntimeError("The AI found no suitable moments in this video. AI reply began: " + repr(highlights.LAST_RAW[:200]))
     rest("DELETE", "cl_clips", {"job_id": f"eq.{job['id']}", "status": "eq.suggested"})
-    rest("POST", "cl_clips", [{**c, "user_id": uid, "source_video_id": vid["id"], "job_id": job["id"],
+    rest("POST", "cl_clips", None, [{**c, "user_id": uid, "source_video_id": vid["id"], "job_id": job["id"],
                                "status": "suggested"} for c in clips])
-    rest("POST", "cl_usage", {"user_id": uid, "job_id": job["id"], "minutes": round(dur / 60, 2)})
+    rest("POST", "cl_usage", None, {"user_id": uid, "job_id": job["id"], "minutes": round(dur / 60, 2)})
     return {"clips_created": len(clips), "source_seconds": round(dur)}
 
 

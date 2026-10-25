@@ -2,6 +2,7 @@
 sentence boundaries and scores them from listed signals. No fallback results are invented."""
 import json, os, re, requests
 
+LAST_RAW = ""  # last AI reply (trimmed), shown in errors so failures are diagnosable
 SCORE_WEIGHTS = {"hook": 25, "pacing": 25, "emphasis": 15, "clean_ending": 20, "duration_fit": 15}
 
 
@@ -35,6 +36,9 @@ def propose(segments, n, min_s, max_s):
 
 
 def _parse(raw):
+    global LAST_RAW
+    LAST_RAW = (raw or "")[:300]
+    raw = raw or ""
     m = re.search(r"\[.*\]", raw, re.S)
     if not m:
         raise RuntimeError("AI provider reply did not contain a clip list.")
@@ -71,11 +75,29 @@ def score(start, end, segments, min_s, max_s):
                    "note": "Guidance from transcript signals only. Not a prediction of views."}
 
 
+def _secs(v):
+    """Accept 12.5, "12.5", "0:12" or "00:01:05" as seconds."""
+    if isinstance(v, (int, float)):
+        return float(v)
+    parts = [float(p) for p in str(v).strip().split(":")]
+    out = 0.0
+    for p in parts:
+        out = out * 60 + p
+    return out
+
+
+def _pick(c, *names):
+    for n in names:
+        if n in c:
+            return c[n]
+    raise KeyError(names[0])
+
+
 def build_clips(segments, video_duration, n=3, min_s=20, max_s=60):
     out, used = [], []
     for c in propose(segments, n, min_s, max_s):
         try:
-            s, e = snap(float(c["start"]), float(c["end"]), segments, max_s)
+            s, e = snap(_secs(_pick(c, "start", "start_time", "start_seconds")), _secs(_pick(c, "end", "end_time", "end_seconds")), segments, max_s)
         except (KeyError, TypeError, ValueError):
             continue
         e = min(e, video_duration)
