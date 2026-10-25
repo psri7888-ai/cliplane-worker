@@ -35,6 +35,21 @@ def download(path, dest):
                 f.write(chunk)
 
 
+def fetch_source(vid, dest):
+    """Rebuild the source video. Big files are uploaded in parts; joining the bytes restores the original."""
+    paths = vid.get("storage_parts") or [vid["storage_path"]]
+    limit = int(os.environ.get("MAX_SOURCE_MB", "900")) * 1024 * 1024
+    with open(dest, "wb") as out:
+        for i, p in enumerate(paths):
+            part = f"{dest}.p{i}"
+            download(p, part)
+            with open(part, "rb") as f:
+                shutil.copyfileobj(f, out, 1 << 20)
+            os.remove(part)
+            if out.tell() > limit:
+                raise RuntimeError(f"Source file is larger than the {limit // (1 << 20)} MB limit.")
+
+
 def upload(path, src):
     with open(src, "rb") as f:
         r = requests.post(f"{URL}/storage/v1/object/{BUCKET}/{path}", timeout=300,
@@ -93,14 +108,14 @@ def run_generation(job, tmp):
                            "downloading from YouTube links is not supported.")
     plan = plan_for(uid)
     src = os.path.join(tmp, "src.mp4")
-    download(vid["storage_path"], src)
+    fetch_source(vid, src)
     dur = render.probe_duration(src)
     if minutes_used(uid) + dur / 60 > plan["monthly_minutes"]:
         raise RuntimeError(f"This video would exceed your plan's {plan['monthly_minutes']} processing minutes this month.")
     tr = transcribe(src, tmp)
     rest("PATCH", "cl_source_videos", {"id": f"eq.{vid['id']}"}, {"transcript": tr, "duration_seconds": int(dur)})
     max_s = min(60, plan["max_clip_seconds"])
-    clips = highlights.build_clips(tr["segments"], dur, n=3, min_s=min(20, max_s, max(5, int(dur * 0.5))), max_s=max_s)  # short videos get shorter minimums
+    clips = highlights.build_clips(tr["segments"], dur, n=(5 if dur > 1200 else 3), min_s=min(20, max_s, max(5, int(dur * 0.5))), max_s=max_s)  # short videos get shorter minimums
     if not clips:
         raise RuntimeError("The AI found no suitable moments in this video. AI reply began: " + repr(highlights.LAST_RAW[:200]))
     rest("DELETE", "cl_clips", {"job_id": f"eq.{job['id']}", "status": "eq.suggested"})
@@ -125,7 +140,7 @@ def run_render(job, tmp):
     if e_ - s_ > plan["max_clip_seconds"]:
         raise RuntimeError(f"Clip is longer than your plan allows ({plan['max_clip_seconds']} seconds).")
     src = os.path.join(tmp, "src.mp4")
-    download(vid["storage_path"], src)
+    fetch_source(vid, src)
     if clip.get("caption_text"):
         lines = render.manual_lines(clip["caption_text"], e_ - s_)
     else:

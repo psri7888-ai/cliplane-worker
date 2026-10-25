@@ -1,6 +1,6 @@
 """Highlight selection: an LLM proposes moments, deterministic code snaps them to
 sentence boundaries and scores them from listed signals. No fallback results are invented."""
-import json, os, re, requests
+import json, os, re, time, requests
 
 LAST_RAW = ""  # last AI reply (trimmed), shown in errors so failures are diagnosable
 SCORE_WEIGHTS = {"hook": 25, "pacing": 25, "emphasis": 15, "clean_ending": 20, "duration_fit": 15}
@@ -17,11 +17,15 @@ def propose(segments, n, min_s, max_s):
               "Reply with ONLY a JSON list of objects: start, end (seconds), title (max 70 chars), "
               "description (one sentence). Do not promise views or virality.\n\n" + text)
     if not key:  # free path: Groq's OpenAI-compatible chat endpoint
-        r = requests.post("https://api.groq.com/openai/v1/chat/completions", timeout=120,
-                          headers={"Authorization": f"Bearer {gkey}"},
-                          json={"model": os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"),
-                                "messages": [{"role": "user", "content": prompt}], "max_tokens": 8000,
-                                "reasoning_effort": "low"})
+        for attempt in range(4):  # the free plan rate-limits; wait and retry on 429
+            r = requests.post("https://api.groq.com/openai/v1/chat/completions", timeout=120,
+                              headers={"Authorization": f"Bearer {gkey}"},
+                              json={"model": os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"),
+                                    "messages": [{"role": "user", "content": prompt}], "max_tokens": 8000,
+                                    "reasoning_effort": "low"})
+            if r.status_code != 429:
+                break
+            time.sleep(int(os.environ.get("AI_RETRY_SECONDS", "25")))
         if r.status_code != 200:
             raise RuntimeError(f"AI provider returned {r.status_code}: {r.text[:200]}. Check GROQ_API_KEY and GROQ_MODEL.")
         raw = r.json()["choices"][0]["message"]["content"]
@@ -43,6 +47,32 @@ def _parse(raw):
     if not m:
         raise RuntimeError("AI provider reply did not contain a clip list.")
     return json.loads(m.group(0))
+
+
+WINDOW_CHARS = 15000
+
+
+def windows(segments, max_windows=8):
+    """Split a long transcript into windows so every part of a long video gets looked at."""
+    out, cur, size = [], [], 0
+    for s in segments:
+        cur.append(s)
+        size += len(s["text"]) + 14
+        if size >= WINDOW_CHARS:
+            out.append(cur); cur, size = [], 0
+    if cur:
+        out.append(cur)
+    return out[:max_windows]
+
+
+def propose_all(segments, n, min_s, max_s):
+    wins = windows(segments)
+    found = []
+    for i, w in enumerate(wins):
+        found += propose(w, n if len(wins) == 1 else 2, min_s, max_s)
+        if i < len(wins) - 1:
+            time.sleep(int(os.environ.get("AI_PAUSE_SECONDS", "3")))
+    return found
 
 
 def snap(start, end, segments, max_s):
@@ -95,7 +125,7 @@ def _pick(c, *names):
 
 def build_clips(segments, video_duration, n=3, min_s=20, max_s=60):
     out, used = [], []
-    for c in propose(segments, n, min_s, max_s):
+    for c in propose_all(segments, n, min_s, max_s):
         try:
             s, e = snap(_secs(_pick(c, "start", "start_time", "start_seconds")), _secs(_pick(c, "end", "end_time", "end_seconds")), segments, max_s)
         except (KeyError, TypeError, ValueError):
@@ -108,4 +138,5 @@ def build_clips(segments, video_duration, n=3, min_s=20, max_s=60):
         text = " ".join(x["text"] for x in segments if x["end"] > s and x["start"] < e)
         out.append({"title": str(c.get("title", "Untitled clip"))[:150], "description": str(c.get("description", "")),
                     "start_seconds": round(s, 2), "end_seconds": round(e, 2), "score": total, "score_signals": sig})
-    return out
+    out.sort(key=lambda c: -c["score"])
+    return out[:n]
