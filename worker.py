@@ -196,6 +196,8 @@ def main():
             job = claim()
         except Exception as e:  # noqa: BLE001
             log(f"poll error: {e}")
+            if once:
+                sys.exit(1)  # make a scheduled run show red instead of a false "queue empty"
             job = None
         if job:
             process(job)

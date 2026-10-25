@@ -9,7 +9,8 @@ def propose(segments, n, min_s, max_s):
     key, gkey = os.environ.get("ANTHROPIC_API_KEY"), os.environ.get("GROQ_API_KEY")
     if not key and not gkey:
         raise RuntimeError("GROQ_API_KEY (free) or ANTHROPIC_API_KEY is not set. Highlight detection needs an AI provider key.")
-    text = "\n".join(f"[{s['start']:.1f}-{s['end']:.1f}] {s['text']}" for s in segments)[:150000]
+    text = "\n".join(f"[{s['start']:.1f}-{s['end']:.1f}] {s['text']}" for s in segments)
+    text = text[:150000] if key else text[:20000]  # free Groq plan has a small per-minute token limit
     prompt = (f"Pick up to {n} self-contained moments from this transcript that would work as standalone short clips, "
               f"each between {min_s} and {max_s} seconds. Start and end on complete sentences. "
               "Reply with ONLY a JSON list of objects: start, end (seconds), title (max 70 chars), "
@@ -17,10 +18,11 @@ def propose(segments, n, min_s, max_s):
     if not key:  # free path: Groq's OpenAI-compatible chat endpoint
         r = requests.post("https://api.groq.com/openai/v1/chat/completions", timeout=120,
                           headers={"Authorization": f"Bearer {gkey}"},
-                          json={"model": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
-                                "messages": [{"role": "user", "content": prompt}], "max_tokens": 2000})
+                          json={"model": os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"),
+                                "messages": [{"role": "user", "content": prompt}], "max_tokens": 8000,
+                                "reasoning_effort": "low"})
         if r.status_code != 200:
-            raise RuntimeError(f"AI provider returned {r.status_code}. Check GROQ_API_KEY and GROQ_MODEL (see console.groq.com models list).")
+            raise RuntimeError(f"AI provider returned {r.status_code}: {r.text[:200]}. Check GROQ_API_KEY and GROQ_MODEL.")
         raw = r.json()["choices"][0]["message"]["content"]
         return _parse(raw)
     r = requests.post("https://api.anthropic.com/v1/messages", timeout=120,
