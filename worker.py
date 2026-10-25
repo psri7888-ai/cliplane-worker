@@ -1,6 +1,6 @@
 """Cliplane worker: claims queued jobs from Supabase and runs them.
 Sources are files the user uploaded to their own storage folder. The worker never fetches user-supplied URLs."""
-import os, shutil, sys, tempfile, time, glob, json, datetime as dt
+import os, shutil, sys, tempfile, time, glob, json, traceback, datetime as dt
 import requests
 import highlights, render
 
@@ -146,7 +146,8 @@ def process(job):
                                                            "updated_at": dt.datetime.utcnow().isoformat()})
         log(f"job {job['id']} completed")
     except Exception as e:  # noqa: BLE001 - report every failure on the job row
-        msg = str(e)[:500]
+        fr = traceback.extract_tb(e.__traceback__)[-1]  # where it failed, to make errors diagnosable
+        msg = f"{str(e)[:450]} [{os.path.basename(fr.filename)}:{fr.lineno}]"
         retry = job["attempts"] < MAX_ATTEMPTS and "is not set" not in msg and "exceed" not in msg
         rest("PATCH", "cl_jobs", {"id": f"eq.{job['id']}"}, {"status": "queued" if retry else "failed", "error": msg,
                                                            "updated_at": dt.datetime.utcnow().isoformat()})
