@@ -100,7 +100,7 @@ def run_generation(job, tmp):
     tr = transcribe(src, tmp)
     rest("PATCH", "cl_source_videos", {"id": f"eq.{vid['id']}"}, {"transcript": tr, "duration_seconds": int(dur)})
     max_s = min(60, plan["max_clip_seconds"])
-    clips = highlights.build_clips(tr["segments"], dur, n=3, min_s=min(20, max_s), max_s=max_s)
+    clips = highlights.build_clips(tr["segments"], dur, n=3, min_s=min(20, max_s, max(5, int(dur * 0.5))), max_s=max_s)  # short videos get shorter minimums
     if not clips:
         raise RuntimeError("The AI found no suitable moments in this video.")
     rest("DELETE", "cl_clips", {"job_id": f"eq.{job['id']}", "status": "eq.suggested"})

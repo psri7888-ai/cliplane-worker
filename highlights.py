@@ -79,7 +79,7 @@ def build_clips(segments, video_duration, n=3, min_s=20, max_s=60):
         except (KeyError, TypeError, ValueError):
             continue
         e = min(e, video_duration)
-        if e - s < 5 or any(s < ue and e > us for us, ue in used):
+        if e - s < min(5, min_s) or any(s < ue and e > us for us, ue in used):
             continue
         used.append((s, e))
         total, sig = score(s, e, segments, min_s, max_s)
